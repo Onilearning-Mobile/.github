@@ -118,14 +118,27 @@ jobs:
           PR_AUTHOR: ${{ inputs.pr_author }}
           LIST_ID: "901715099907"
         run: |
+          # custom_task_ids na query só resolve o ID na URL, não o campo "parent"
+          # do corpo — por isso, para IDs customizados (ONIL-N), primeiro
+          # buscamos o ID interno real da task pai.
+          PARENT_ID="$TASK_ID"
+          if [ -n "$QS" ]; then
+            PARENT_ID=$(curl -s "https://api.clickup.com/api/v2/task/${TASK_ID}?${QS}" \
+              -H "Authorization: ${CLICKUP_API_TOKEN}" | jq -r '.id')
+          fi
+
           NAME="Code Review — PR #${PR_NUMBER}: ${PR_TITLE}"
           DESC=$(printf '**PR:** [%s](%s)\n**Branch:** `%s`\n**Autor:** %s\n\nRevisar as mudanças desta branch antes de aprovar o merge para `dev`.' "$PR_TITLE" "$PR_URL" "$PR_BRANCH" "$PR_AUTHOR")
-          PAYLOAD=$(jq -n --arg name "$NAME" --arg desc "$DESC" --arg parent "$TASK_ID" \
+          PAYLOAD=$(jq -n --arg name "$NAME" --arg desc "$DESC" --arg parent "$PARENT_ID" \
             '{name: $name, markdown_description: $desc, parent: $parent, priority: 2}')
-          curl -s -X POST "https://api.clickup.com/api/v2/list/${LIST_ID}/task${QS:+?$QS}" \
+          RESPONSE=$(curl -s -X POST "https://api.clickup.com/api/v2/list/${LIST_ID}/task" \
             -H "Authorization: ${CLICKUP_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+          echo "$RESPONSE"
+          if echo "$RESPONSE" | jq -e '.err' >/dev/null 2>&1; then
+            echo "::warning::Falha ao criar subtask de Code Review: $(echo "$RESPONSE" | jq -r '.err')"
+          fi
 
       - name: Notificar no chat "Dev. Mobile"
         if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
@@ -138,10 +151,17 @@ jobs:
         run: |
           CONTENT="🔍 **[${PR_TITLE}](${PR_URL})** entrou em code review — [task](https://app.clickup.com/t/${TASK_ID})"
           PAYLOAD=$(jq -n --arg content "$CONTENT" '{type: "message", content: $content, content_format: "text/md"}')
-          curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
-            -H "Authorization: ${CLICKUP_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
+              -H "Authorization: ${CLICKUP_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+            echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          if ! echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1; then
+            echo "::warning::Falha ao notificar chat após 3 tentativas: $RESPONSE"
+          fi
 
       - name: Avisar no PR — link do ClickUp não encontrado
         if: steps.extract.outputs.found == 'false'
@@ -269,10 +289,17 @@ jobs:
         run: |
           CONTENT="✅ **[${PR_TITLE}](${PR_URL})** foi mergeado por **${MERGED_BY}** — [task](https://app.clickup.com/t/${TASK_ID}) concluída"
           PAYLOAD=$(jq -n --arg content "$CONTENT" '{type: "message", content: $content, content_format: "text/md"}')
-          curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
-            -H "Authorization: ${CLICKUP_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
+              -H "Authorization: ${CLICKUP_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+            echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          if ! echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1; then
+            echo "::warning::Falha ao notificar chat após 3 tentativas: $RESPONSE"
+          fi
 
       - name: Avisar no PR — link do ClickUp não encontrado
         if: steps.extract.outputs.found == 'false'
