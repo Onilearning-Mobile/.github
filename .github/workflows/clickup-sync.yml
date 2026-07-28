@@ -45,15 +45,39 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Extrair ID da task do ClickUp da descrição do PR
+      - name: Extrair ID da task do ClickUp (branch primeiro, descrição como fallback)
         id: extract
         shell: bash
         env:
+          PR_BRANCH: ${{ inputs.pr_branch }}
           PR_BODY: ${{ inputs.pr_body }}
         run: |
-          if [[ "$PR_BODY" =~ \*\*ClickUp:\*\*[[:space:]]*(https://app\.clickup\.com/t/)?([a-zA-Z0-9]+) ]]; then
-            echo "task_id=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          normalize() {
+            local id="$1"
+            if [[ "$id" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "${id^^}"
+            else
+              echo "$id"
+            fi
+          }
+
+          TASK_ID=""
+          shopt -s nocasematch
+          if [[ "$PR_BRANCH" =~ (ONIL-[0-9]+) ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[1]}")
+          elif [[ "$PR_BODY" =~ \*\*ClickUp:\*\*[[:space:]]*\<?(https://app\.clickup\.com/t/)?([A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+)\>? ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[2]}")
+          fi
+          shopt -u nocasematch
+
+          if [[ -n "$TASK_ID" ]]; then
+            echo "task_id=${TASK_ID}" >> "$GITHUB_OUTPUT"
             echo "found=true" >> "$GITHUB_OUTPUT"
+            if [[ "$TASK_ID" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "qs=custom_task_ids=true&team_id=90171059720" >> "$GITHUB_OUTPUT"
+            else
+              echo "qs=" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
@@ -65,9 +89,10 @@ jobs:
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
           TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
         run: |
           STATUS_CODE=$(curl -s -o /tmp/clickup_status.json -w "%{http_code}" \
-            -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}" \
+            -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}${QS:+?$QS}" \
             -H "Authorization: ${CLICKUP_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -d '{"status": "code review"}')
@@ -85,6 +110,7 @@ jobs:
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
           TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
           PR_NUMBER: ${{ inputs.pr_number }}
           PR_TITLE: ${{ inputs.pr_title }}
           PR_URL: ${{ inputs.pr_url }}
@@ -96,7 +122,7 @@ jobs:
           DESC=$(printf '**PR:** [%s](%s)\n**Branch:** `%s`\n**Autor:** %s\n\nRevisar as mudanças desta branch antes de aprovar o merge para `dev`.' "$PR_TITLE" "$PR_URL" "$PR_BRANCH" "$PR_AUTHOR")
           PAYLOAD=$(jq -n --arg name "$NAME" --arg desc "$DESC" --arg parent "$TASK_ID" \
             '{name: $name, markdown_description: $desc, parent: $parent, priority: 2}')
-          curl -s -X POST "https://api.clickup.com/api/v2/list/${LIST_ID}/task" \
+          curl -s -X POST "https://api.clickup.com/api/v2/list/${LIST_ID}/task${QS:+?$QS}" \
             -H "Authorization: ${CLICKUP_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"
@@ -126,7 +152,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ inputs.pr_number }},
-              body: '⚠️ Card do ClickUp não foi movido automaticamente: cole o link da task do ClickUp (https://app.clickup.com/t/...) na descrição deste PR.'
+              body: '⚠️ Card do ClickUp não foi movido automaticamente: nomeie a branch com o ID da task (ex: `feature/ONIL-1234-slug`) ou cole o ID/link na descrição do PR (ex: `**ClickUp:** ONIL-1234`, sem `<` `>` ao redor).'
             })
 
   pr-merged:
@@ -135,15 +161,39 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Extrair ID da task do ClickUp da descrição do PR
+      - name: Extrair ID da task do ClickUp (branch primeiro, descrição como fallback)
         id: extract
         shell: bash
         env:
+          PR_BRANCH: ${{ inputs.pr_branch }}
           PR_BODY: ${{ inputs.pr_body }}
         run: |
-          if [[ "$PR_BODY" =~ \*\*ClickUp:\*\*[[:space:]]*(https://app\.clickup\.com/t/)?([a-zA-Z0-9]+) ]]; then
-            echo "task_id=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          normalize() {
+            local id="$1"
+            if [[ "$id" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "${id^^}"
+            else
+              echo "$id"
+            fi
+          }
+
+          TASK_ID=""
+          shopt -s nocasematch
+          if [[ "$PR_BRANCH" =~ (ONIL-[0-9]+) ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[1]}")
+          elif [[ "$PR_BODY" =~ \*\*ClickUp:\*\*[[:space:]]*\<?(https://app\.clickup\.com/t/)?([A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+)\>? ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[2]}")
+          fi
+          shopt -u nocasematch
+
+          if [[ -n "$TASK_ID" ]]; then
+            echo "task_id=${TASK_ID}" >> "$GITHUB_OUTPUT"
             echo "found=true" >> "$GITHUB_OUTPUT"
+            if [[ "$TASK_ID" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "qs=custom_task_ids=true&team_id=90171059720" >> "$GITHUB_OUTPUT"
+            else
+              echo "qs=" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
@@ -155,9 +205,10 @@ jobs:
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
           TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
         run: |
           STATUS_CODE=$(curl -s -o /tmp/clickup_status.json -w "%{http_code}" \
-            -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}" \
+            -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}${QS:+?$QS}" \
             -H "Authorization: ${CLICKUP_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -d '{"status": "concluído"}')
@@ -176,6 +227,7 @@ jobs:
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
           TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
           PR_NUMBER: ${{ inputs.pr_number }}
           MERGED_BY: ${{ inputs.merged_by }}
         run: |
@@ -189,7 +241,7 @@ jobs:
           )
           ASSIGNEE_ID="${GH_TO_CLICKUP[$MERGED_BY]:-}"
 
-          RESPONSE=$(curl -s "https://api.clickup.com/api/v2/task/${TASK_ID}?include_subtasks=true" \
+          RESPONSE=$(curl -s "https://api.clickup.com/api/v2/task/${TASK_ID}?include_subtasks=true${QS:+&$QS}" \
             -H "Authorization: ${CLICKUP_API_TOKEN}")
           SUBTASK_ID=$(echo "$RESPONSE" | jq -r --arg pr "PR #${PR_NUMBER}:" '.subtasks[]? | select(.name | contains($pr)) | .id' | head -n1)
 
@@ -231,5 +283,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ inputs.pr_number }},
-              body: '⚠️ Card do ClickUp não foi movido: nenhum link de task do ClickUp foi encontrado na descrição deste PR.'
+              body: '⚠️ Card do ClickUp não foi movido: nenhuma task encontrada — nem no nome da branch (ex: `feature/ONIL-1234-slug`) nem na descrição do PR (`**ClickUp:** ONIL-1234`).'
             })
