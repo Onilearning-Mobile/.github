@@ -27,6 +27,10 @@ on:
       pr_body:
         required: false
         type: string
+      repo:
+        required: false
+        type: string
+        default: ""
       merged:
         required: false
         type: boolean
@@ -116,7 +120,13 @@ jobs:
           PR_URL: ${{ inputs.pr_url }}
           PR_BRANCH: ${{ inputs.pr_branch }}
           PR_AUTHOR: ${{ inputs.pr_author }}
+          REPO: ${{ inputs.repo }}
           LIST_ID: "901715099907"
+          FIELD_EQUIPE: "bf0b9d1c-7c65-410a-a74e-ed75009003f5"
+          OPTION_MOBILE: "a3145da6-72d6-4324-9413-33b1060d4231"
+          FIELD_SISTEMA: "2424f2c6-fe24-4b4f-a766-b8c7cb17a157"
+          OPTION_SEJA: "0cd17024-51b1-47a5-8f27-e190fe63726c"
+          OPTION_ONIAPP: "4eefe1db-bbc9-4c91-b154-0e54d923db6d"
         run: |
           # custom_task_ids na query só resolve o ID na URL, não o campo "parent"
           # do corpo — por isso, para IDs customizados (ONIL-N), primeiro
@@ -127,10 +137,28 @@ jobs:
               -H "Authorization: ${CLICKUP_API_TOKEN}" | jq -r '.id')
           fi
 
+          # Equipe é sempre Mobile (é o único time que roda esse workflow).
+          # Sistema é inferido do nome do repo — mesma lógica/IDs da skill clickup-card.
+          CUSTOM_FIELDS=$(jq -n --arg field "$FIELD_EQUIPE" --arg value "$OPTION_MOBILE" \
+            '[{id: $field, value: $value}]')
+          case "${REPO,,}" in
+            *seja*)
+              CUSTOM_FIELDS=$(echo "$CUSTOM_FIELDS" | jq --arg field "$FIELD_SISTEMA" --arg opt "$OPTION_SEJA" \
+                '. + [{id: $field, value: [$opt]}]')
+              ;;
+            *oniapp*|*oni-app*)
+              CUSTOM_FIELDS=$(echo "$CUSTOM_FIELDS" | jq --arg field "$FIELD_SISTEMA" --arg opt "$OPTION_ONIAPP" \
+                '. + [{id: $field, value: [$opt]}]')
+              ;;
+            *)
+              echo "::warning::Não deu pra inferir o Sistema pelo nome do repo '${REPO}' — campo ficou vazio na subtask."
+              ;;
+          esac
+
           NAME="Code Review — PR #${PR_NUMBER}: ${PR_TITLE}"
           DESC=$(printf '**PR:** [%s](%s)\n**Branch:** `%s`\n**Autor:** %s\n\nRevisar as mudanças desta branch antes de aprovar o merge para `dev`.' "$PR_TITLE" "$PR_URL" "$PR_BRANCH" "$PR_AUTHOR")
-          PAYLOAD=$(jq -n --arg name "$NAME" --arg desc "$DESC" --arg parent "$PARENT_ID" \
-            '{name: $name, markdown_description: $desc, parent: $parent, priority: 2}')
+          PAYLOAD=$(jq -n --arg name "$NAME" --arg desc "$DESC" --arg parent "$PARENT_ID" --argjson custom_fields "$CUSTOM_FIELDS" \
+            '{name: $name, markdown_description: $desc, parent: $parent, priority: 2, custom_fields: $custom_fields}')
           RESPONSE=$(curl -s -X POST "https://api.clickup.com/api/v2/list/${LIST_ID}/task" \
             -H "Authorization: ${CLICKUP_API_TOKEN}" \
             -H "Content-Type: application/json" \
