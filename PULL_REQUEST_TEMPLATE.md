@@ -1,4 +1,6 @@
-**ClickUp:** <cole o link ou só o ID da task aqui, ex: 86e29ax99>
+**ClickUp:** ONIL-0000
+
+<!-- Se a branch já começa com ONIL-<id> (ex: feature/ONIL-1234-slug), pode deixar este campo como está — o ID é lido primeiro da branch. Troque "0000" pelo ID da task só se a branch não seguir esse padrão. Não use "<" ">" ao redor do ID. -->
 
 ## Descrição
 
