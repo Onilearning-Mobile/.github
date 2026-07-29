@@ -1,6 +1,7 @@
 name: TMP diagnostico token
 on:
-  workflow_dispatch:
+  pull_request:
+    branches: [main]
 jobs:
   check:
     runs-on: ubuntu-latest
