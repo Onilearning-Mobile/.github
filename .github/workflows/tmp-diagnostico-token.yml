@@ -1,0 +1,22 @@
+name: TMP diagnostico token
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Testar CLICKUP_API_TOKEN
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+        run: |
+          if [ -z "$CLICKUP_API_TOKEN" ]; then
+            echo "RESULTADO: token vazio/nao configurado neste repo (nem via org secret)"
+            exit 0
+          fi
+          CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" "https://api.clickup.com/api/v2/list/901715099907" -H "Authorization: ${CLICKUP_API_TOKEN}")
+          echo "RESULTADO: http_status=$CODE"
+          if [ "$CODE" = "200" ]; then
+            echo "RESULTADO: token valido, autenticou com sucesso"
+          else
+            echo "RESULTADO: token presente mas falhou (ver status acima)"
+          fi
