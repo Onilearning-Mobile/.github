@@ -1,0 +1,39 @@
+name: Lembrete de PR parado em Code Review
+
+on:
+  schedule:
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Buscar subtasks de Code Review paradas há mais de 2 dias
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+        run: |
+          LIST_ID="901715099907"
+          NOW_MS=$(($(date +%s) * 1000))
+          THRESHOLD_MS=$((2 * 24 * 60 * 60 * 1000))
+
+          RESPONSE=$(curl -s "https://api.clickup.com/api/v2/list/${LIST_ID}/task?subtasks=true&include_closed=false&statuses[]=code%20review" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}")
+
+          echo "$RESPONSE" | jq -c '.tasks[]? | select(.name | startswith("Code Review — PR #"))' | while read -r task; do
+            NAME=$(echo "$task" | jq -r '.name')
+            URL=$(echo "$task" | jq -r '.url')
+            CREATED=$(echo "$task" | jq -r '.date_created')
+            AGE=$((NOW_MS - CREATED))
+
+            if [ "$AGE" -gt "$THRESHOLD_MS" ]; then
+              DAYS=$((AGE / 86400000))
+              CONTENT="⏰ **${NAME}** está em code review há ${DAYS} dia(s) — [ver task](${URL})"
+              PAYLOAD=$(jq -n --arg content "$CONTENT" '{type: "message", content: $content, content_format: "text/md"}')
+              curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
+                -H "Authorization: ${CLICKUP_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD" > /dev/null
+            fi
+          done

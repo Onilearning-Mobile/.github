@@ -38,13 +38,25 @@ on:
       merged_by:
         required: false
         type: string
+      pr_draft:
+        required: false
+        type: boolean
+        default: false
+      review_state:
+        required: false
+        type: string
+        default: ""
+      reviewer:
+        required: false
+        type: string
+        default: ""
     secrets:
       CLICKUP_API_TOKEN:
         required: true
 
 jobs:
   pr-opened:
-    if: inputs.action == 'opened' && inputs.base_ref == 'dev'
+    if: inputs.base_ref == 'dev' && ((inputs.action == 'opened' && inputs.pr_draft != true) || inputs.action == 'ready_for_review')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -191,6 +203,24 @@ jobs:
             echo "::warning::Falha ao notificar chat após 3 tentativas: $RESPONSE"
           fi
 
+      - name: Comentar na task do ClickUp
+        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_URL: ${{ inputs.pr_url }}
+          PR_BRANCH: ${{ inputs.pr_branch }}
+        run: |
+          COMMENT=$(printf '🔍 PR [%s](%s) (`%s`) entrou em code review.' "$PR_TITLE" "$PR_URL" "$PR_BRANCH")
+          PAYLOAD=$(jq -n --arg text "$COMMENT" '{comment_text: $text}')
+          curl -s -X POST "https://api.clickup.com/api/v2/task/${TASK_ID}/comment${QS:+?$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
+
       - name: Avisar no PR — link do ClickUp não encontrado
         if: steps.extract.outputs.found == 'false'
         uses: actions/github-script@v7
@@ -329,6 +359,24 @@ jobs:
             echo "::warning::Falha ao notificar chat após 3 tentativas: $RESPONSE"
           fi
 
+      - name: Comentar na task do ClickUp
+        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_URL: ${{ inputs.pr_url }}
+          MERGED_BY: ${{ inputs.merged_by }}
+        run: |
+          COMMENT=$(printf '✅ PR [%s](%s) foi mergeado por **%s**.' "$PR_TITLE" "$PR_URL" "$MERGED_BY")
+          PAYLOAD=$(jq -n --arg text "$COMMENT" '{comment_text: $text}')
+          curl -s -X POST "https://api.clickup.com/api/v2/task/${TASK_ID}/comment${QS:+?$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
+
       - name: Avisar no PR — link do ClickUp não encontrado
         if: steps.extract.outputs.found == 'false'
         uses: actions/github-script@v7
@@ -340,3 +388,298 @@ jobs:
               issue_number: ${{ inputs.pr_number }},
               body: '⚠️ Card do ClickUp não foi movido: nenhuma task encontrada — nem no nome da branch (ex: `feature/ONIL-1234-slug`) nem na descrição do PR (`**ClickUp:** ONIL-1234`).'
             })
+
+  pr-closed-unmerged:
+    if: inputs.action == 'closed' && inputs.merged == false && inputs.base_ref == 'dev'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Extrair ID da task do ClickUp (branch primeiro, descrição como fallback)
+        id: extract
+        shell: bash
+        env:
+          PR_BRANCH: ${{ inputs.pr_branch }}
+          PR_BODY: ${{ inputs.pr_body }}
+        run: |
+          normalize() {
+            local id="$1"
+            if [[ "$id" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "${id^^}"
+            else
+              echo "$id"
+            fi
+          }
+
+          TASK_ID=""
+          shopt -s nocasematch
+          if [[ "$PR_BRANCH" =~ (ONIL-[0-9]+) ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[1]}")
+          elif [[ "$PR_BODY" =~ \*\*ClickUp:\*\*[[:space:]]*\<?(https://app\.clickup\.com/t/)?([A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+)\>? ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[2]}")
+          fi
+          shopt -u nocasematch
+
+          if [[ -n "$TASK_ID" ]]; then
+            echo "task_id=${TASK_ID}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            if [[ "$TASK_ID" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "qs=custom_task_ids=true&team_id=90171059720" >> "$GITHUB_OUTPUT"
+            else
+              echo "qs=" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mover task de volta para "em andamento"
+        id: move_status
+        if: steps.extract.outputs.found == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+        run: |
+          STATUS_CODE=$(curl -s -o /tmp/clickup_status.json -w "%{http_code}" \
+            -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}${QS:+?$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "em andamento"}')
+          echo "http_status=${STATUS_CODE}" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS_CODE" = "200" ]; then
+            echo "success=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            cat /tmp/clickup_status.json
+          fi
+
+      - name: Descartar subtask de Code Review
+        if: steps.extract.outputs.found == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          RESPONSE=$(curl -s "https://api.clickup.com/api/v2/task/${TASK_ID}?include_subtasks=true${QS:+&$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}")
+          SUBTASK_ID=$(echo "$RESPONSE" | jq -r --arg pr "PR #${PR_NUMBER}:" '.subtasks[]? | select(.name | contains($pr)) | .id' | head -n1)
+
+          if [ -n "$SUBTASK_ID" ]; then
+            curl -s -X PUT "https://api.clickup.com/api/v2/task/${SUBTASK_ID}" \
+              -H "Authorization: ${CLICKUP_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d '{"status": "descartado"}'
+          fi
+
+      - name: Notificar no chat "Dev. Mobile"
+        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_URL: ${{ inputs.pr_url }}
+        run: |
+          CONTENT="❌ **[${PR_TITLE}](${PR_URL})** foi fechado sem merge — [task](https://app.clickup.com/t/${TASK_ID}) voltou para \"em andamento\""
+          PAYLOAD=$(jq -n --arg content "$CONTENT" '{type: "message", content: $content, content_format: "text/md"}')
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
+              -H "Authorization: ${CLICKUP_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+            echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          if ! echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1; then
+            echo "::warning::Falha ao notificar chat após 3 tentativas: $RESPONSE"
+          fi
+
+      - name: Avisar no PR — link do ClickUp não encontrado
+        if: steps.extract.outputs.found == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.pr_number }},
+              body: '⚠️ PR fechado sem merge, mas nenhuma task do ClickUp foi encontrada (branch/descrição sem ID).'
+            })
+
+  pr-review:
+    if: inputs.action == 'review' && inputs.base_ref == 'dev' && (inputs.review_state == 'changes_requested' || inputs.review_state == 'approved')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Extrair ID da task do ClickUp (branch primeiro, descrição como fallback)
+        id: extract
+        shell: bash
+        env:
+          PR_BRANCH: ${{ inputs.pr_branch }}
+          PR_BODY: ${{ inputs.pr_body }}
+        run: |
+          normalize() {
+            local id="$1"
+            if [[ "$id" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "${id^^}"
+            else
+              echo "$id"
+            fi
+          }
+
+          TASK_ID=""
+          shopt -s nocasematch
+          if [[ "$PR_BRANCH" =~ (ONIL-[0-9]+) ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[1]}")
+          elif [[ "$PR_BODY" =~ \*\*ClickUp:\*\*[[:space:]]*\<?(https://app\.clickup\.com/t/)?([A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+)\>? ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[2]}")
+          fi
+          shopt -u nocasematch
+
+          if [[ -n "$TASK_ID" ]]; then
+            echo "task_id=${TASK_ID}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            if [[ "$TASK_ID" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "qs=custom_task_ids=true&team_id=90171059720" >> "$GITHUB_OUTPUT"
+            else
+              echo "qs=" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mover task para "em alteração/teste" (mudanças solicitadas)
+        id: move_status
+        if: steps.extract.outputs.found == 'true' && inputs.review_state == 'changes_requested'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+        run: |
+          STATUS_CODE=$(curl -s -o /tmp/clickup_status.json -w "%{http_code}" \
+            -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}${QS:+?$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "em alteração/teste"}')
+          echo "http_status=${STATUS_CODE}" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS_CODE" = "200" ]; then
+            echo "success=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            cat /tmp/clickup_status.json
+          fi
+
+      - name: Comentar na task do ClickUp
+        if: steps.extract.outputs.found == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+          PR_URL: ${{ inputs.pr_url }}
+          REVIEWER: ${{ inputs.reviewer }}
+          REVIEW_STATE: ${{ inputs.review_state }}
+        run: |
+          if [ "$REVIEW_STATE" = "changes_requested" ]; then
+            COMMENT="🔁 ${REVIEWER} solicitou mudanças no PR: ${PR_URL}"
+          else
+            COMMENT="✅ ${REVIEWER} aprovou o PR: ${PR_URL}"
+          fi
+          PAYLOAD=$(jq -n --arg text "$COMMENT" '{comment_text: $text}')
+          curl -s -X POST "https://api.clickup.com/api/v2/task/${TASK_ID}/comment${QS:+?$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
+
+      - name: Notificar no chat "Dev. Mobile"
+        if: steps.extract.outputs.found == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_URL: ${{ inputs.pr_url }}
+          REVIEWER: ${{ inputs.reviewer }}
+          REVIEW_STATE: ${{ inputs.review_state }}
+        run: |
+          if [ "$REVIEW_STATE" = "changes_requested" ]; then
+            CONTENT="🔁 **${REVIEWER}** solicitou mudanças em **[${PR_TITLE}](${PR_URL})** — [task](https://app.clickup.com/t/${TASK_ID}) voltou para \"em alteração/teste\""
+          else
+            CONTENT="✅ **${REVIEWER}** aprovou **[${PR_TITLE}](${PR_URL})** — [task](https://app.clickup.com/t/${TASK_ID}) pronta pra merge"
+          fi
+          PAYLOAD=$(jq -n --arg content "$CONTENT" '{type: "message", content: $content, content_format: "text/md"}')
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -s -X POST "https://api.clickup.com/api/v3/workspaces/90171059720/chat/channels/6-901715099907-8/messages" \
+              -H "Authorization: ${CLICKUP_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+            echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          if ! echo "$RESPONSE" | jq -e '.id' >/dev/null 2>&1; then
+            echo "::warning::Falha ao notificar chat após 3 tentativas: $RESPONSE"
+          fi
+
+      - name: Avisar no PR — link do ClickUp não encontrado
+        if: steps.extract.outputs.found == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.pr_number }},
+              body: '⚠️ Review registrada, mas nenhuma task do ClickUp foi encontrada (branch/descrição sem ID).'
+            })
+
+  branch-created:
+    if: inputs.action == 'branch_created'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extrair ID da task do ClickUp a partir do nome da branch
+        id: extract
+        shell: bash
+        env:
+          PR_BRANCH: ${{ inputs.pr_branch }}
+        run: |
+          normalize() {
+            local id="$1"
+            if [[ "$id" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+              echo "${id^^}"
+            else
+              echo "$id"
+            fi
+          }
+
+          TASK_ID=""
+          shopt -s nocasematch
+          if [[ "$PR_BRANCH" =~ (ONIL-[0-9]+) ]]; then
+            TASK_ID=$(normalize "${BASH_REMATCH[1]}")
+          fi
+          shopt -u nocasematch
+
+          if [[ -n "$TASK_ID" ]]; then
+            echo "task_id=${TASK_ID}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "qs=custom_task_ids=true&team_id=90171059720" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mover task para "em andamento"
+        if: steps.extract.outputs.found == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          TASK_ID: ${{ steps.extract.outputs.task_id }}
+          QS: ${{ steps.extract.outputs.qs }}
+        run: |
+          curl -s -X PUT "https://api.clickup.com/api/v2/task/${TASK_ID}${QS:+?$QS}" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "em andamento"}'
