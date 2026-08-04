@@ -180,8 +180,20 @@ jobs:
             echo "::warning::Falha ao criar subtask de Code Review: $(echo "$RESPONSE" | jq -r '.err')"
           fi
 
+      - name: Checar janela de notificação (seg-sex, 8h-16h BRT)
+        id: notify_window
+        shell: bash
+        run: |
+          DOW=$(TZ='America/Sao_Paulo' date +%u)
+          HOUR=$(TZ='America/Sao_Paulo' date +%-H)
+          if [ "$DOW" -le 5 ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 16 ]; then
+            echo "in_window=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "in_window=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Notificar no chat "Dev. Mobile"
-        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
+        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true' && steps.notify_window.outputs.in_window == 'true'
         shell: bash
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
@@ -335,8 +347,20 @@ jobs:
               -d "$PAYLOAD"
           fi
 
+      - name: Checar janela de notificação (seg-sex, 8h-16h BRT)
+        id: notify_window
+        shell: bash
+        run: |
+          DOW=$(TZ='America/Sao_Paulo' date +%u)
+          HOUR=$(TZ='America/Sao_Paulo' date +%-H)
+          if [ "$DOW" -le 5 ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 16 ]; then
+            echo "in_window=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "in_window=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Notificar no chat "Dev. Mobile"
-        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
+        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true' && steps.notify_window.outputs.in_window == 'true'
         shell: bash
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
@@ -474,8 +498,20 @@ jobs:
               -d '{"status": "descartado"}'
           fi
 
+      - name: Checar janela de notificação (seg-sex, 8h-16h BRT)
+        id: notify_window
+        shell: bash
+        run: |
+          DOW=$(TZ='America/Sao_Paulo' date +%u)
+          HOUR=$(TZ='America/Sao_Paulo' date +%-H)
+          if [ "$DOW" -le 5 ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 16 ]; then
+            echo "in_window=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "in_window=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Notificar no chat "Dev. Mobile"
-        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true'
+        if: steps.extract.outputs.found == 'true' && steps.move_status.outputs.success == 'true' && steps.notify_window.outputs.in_window == 'true'
         shell: bash
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
@@ -596,8 +632,20 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" > /dev/null
 
+      - name: Checar janela de notificação (seg-sex, 8h-16h BRT)
+        id: notify_window
+        shell: bash
+        run: |
+          DOW=$(TZ='America/Sao_Paulo' date +%u)
+          HOUR=$(TZ='America/Sao_Paulo' date +%-H)
+          if [ "$DOW" -le 5 ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 16 ]; then
+            echo "in_window=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "in_window=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Notificar no chat "Dev. Mobile"
-        if: steps.extract.outputs.found == 'true'
+        if: steps.extract.outputs.found == 'true' && steps.notify_window.outputs.in_window == 'true'
         shell: bash
         env:
           CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
